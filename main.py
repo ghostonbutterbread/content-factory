@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -159,6 +160,82 @@ def cmd_times(args):
     print(f"  Peak hours: {', '.join(str(h) + ':00' for h in times['peak_hours'])}")
 
 
+def cmd_video(args):
+    """Generate a video from content."""
+    print(f"\n🎬 Generating video for {args.platform}...\n")
+    
+    from generators.video import VideoGenerator
+    
+    # Load content from file or generate new
+    if args.file:
+        with open(args.file) as f:
+            content = json.load(f)
+    elif args.topic:
+        factory = ContentFactory()
+        platform = Platform(args.platform)
+        piece = factory.generate(args.topic, platform, args.niche)
+        content = piece.to_dict()
+        _print_content(piece)
+    else:
+        print("Error: provide --file or --topic")
+        return
+    
+    # Generate video
+    gen = VideoGenerator(args.platform)
+    output = gen.generate(content, args.output)
+    
+    if output:
+        size_kb = os.path.getsize(output) / 1024
+        print(f"\n✅ Video generated: {output} ({size_kb:.0f} KB)")
+        print(f"   Platform: {args.platform}")
+        print(f"   Duration: {content.get('duration_seconds', 30)}s")
+    else:
+        print("\n❌ Video generation failed")
+
+
+def cmd_best(args):
+    """Generate the best content piece as a video."""
+    print(f"\n🏆 Finding best content for {args.platform}...\n")
+    
+    factory = ContentFactory()
+    platform = Platform(args.platform)
+    
+    # Discover trends and generate
+    aggregator = TrendAggregator()
+    if args.niche:
+        trends = asyncio.run(aggregator.discover_for_niche(args.niche, limit=10))
+    else:
+        trends = asyncio.run(aggregator.discover(limit=10))
+    
+    if not trends:
+        print("No trends found!")
+        return
+    
+    topics = [t.title for t in trends[:5]]
+    pieces = factory.generate_batch(topics, platform, args.niche)
+    
+    if not pieces:
+        print("No content generated!")
+        return
+    
+    best = pieces[0]
+    print(f"🏆 Best content (Grade: {best.algorithm_grade}, Score: {best.engagement_score})")
+    _print_content(best)
+    
+    # Generate video
+    print("\n🎬 Generating video...")
+    from generators.video import VideoGenerator
+    
+    gen = VideoGenerator(args.platform)
+    output = gen.generate(best.to_dict(), args.output)
+    
+    if output:
+        size_kb = os.path.getsize(output) / 1024
+        print(f"\n✅ Video generated: {output} ({size_kb:.0f} KB)")
+    else:
+        print("\n❌ Video generation failed")
+
+
 def _print_content(piece):
     """Print a content piece in a readable format."""
     print(f"📌 Title: {piece.title}")
@@ -227,6 +304,20 @@ def main():
     p = sub.add_parser("times", help="Show best posting times")
     p.add_argument("--platform", default="tiktok", choices=["tiktok", "youtube_shorts", "instagram_reels"])
     
+    # video
+    p = sub.add_parser("video", help="Generate video from content")
+    p.add_argument("--platform", default="tiktok", choices=["tiktok", "youtube_shorts", "instagram_reels"])
+    p.add_argument("--file", help="JSON file with content")
+    p.add_argument("--topic", help="Topic to generate and create video from")
+    p.add_argument("--niche", default="general", help="Content niche")
+    p.add_argument("--output", "-o", help="Output video path")
+    
+    # best
+    p = sub.add_parser("best", help="Find best trend → generate content → create video")
+    p.add_argument("--niche", default="tech", help="Content niche")
+    p.add_argument("--platform", default="tiktok", choices=["tiktok", "youtube_shorts", "instagram_reels"])
+    p.add_argument("--output", "-o", help="Output video path")
+    
     args = parser.parse_args()
     
     commands = {
@@ -235,6 +326,8 @@ def main():
         "pipeline": cmd_pipeline,
         "score": cmd_score,
         "times": cmd_times,
+        "video": cmd_video,
+        "best": cmd_best,
     }
     
     if args.command in commands:
